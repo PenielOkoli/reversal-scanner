@@ -33,6 +33,9 @@ first real test needs to happen outside this scaffold's build environment.
       not yet smoke-tested against live data)
 - [x] Supabase schema (supabase/schema.sql) + db.js wired against it (untested against a live project, needs real credentials)
 - [ ] Worker deployed and running against live data
-- [ ] Web dashboard
+- [x] Web dashboard: auth (sign in/up), pair+timeframe watchlist (cap-aware),
+      signal table. Typechecked and build-verified (fonts need real internet
+      access to Google Fonts, unavailable in the build sandbox, verified
+      separately with a stand-in font)
 - [ ] Telegram bot linking flow
 - [ ] Push notification subscription flow

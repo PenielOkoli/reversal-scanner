@@ -44,3 +44,9 @@
   live Supabase project.
 - db.js implemented against that schema, including per-user per-stage delivery
   tracking so repeat scan passes don't spam the same notification.
+- Web dashboard (apps/web): Next.js 16 App Router + Tailwind v4, Supabase Auth
+  for sign in/up, proxy.ts (Next 16's replacement for middleware.ts) gating
+  /dashboard. Design system: dark theme, Space Grotesk/Inter/JetBrains Mono,
+  a 3-segment StageMeter as the signature element for the developing/
+  candidate/confirmed progression. Pair selector enforces the pair cap
+  client-side and relies on the DB trigger as the real backstop.
