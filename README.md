@@ -12,6 +12,8 @@ confirmed) per user watchlist. No auto-trading.
                              detector, notifies subscribers via Telegram / push
     apps/web                Dashboard (not scaffolded yet, see apps/web/README.md)
     docs/architecture.md    Data flow and decisions log
+    supabase/schema.sql     Postgres schema: profiles, watchlist_items, signals,
+                             signal_deliveries, cap trigger, RLS policies
 
 ## Getting started
 
@@ -29,7 +31,7 @@ first real test needs to happen outside this scaffold's build environment.
       double-bottom data (developing / candidate / confirmed all verified)
 - [x] Bybit client: klines + symbol list (structure verified against docs,
       not yet smoke-tested against live data)
-- [ ] Supabase schema + db.js implementation
+- [x] Supabase schema (supabase/schema.sql) + db.js wired against it (untested against a live project, needs real credentials)
 - [ ] Worker deployed and running against live data
 - [ ] Web dashboard
 - [ ] Telegram bot linking flow

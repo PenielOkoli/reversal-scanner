@@ -34,5 +34,13 @@
 ## Not yet decided
 
 - Auth provider (Supabase Auth vs Clerk)
-- Exact Supabase schema (watchlists, signals, notification_prefs tables)
-- Exact per-user pair cap inside the confirmed 15-20 range
+- Exact per-user pair cap inside the confirmed 15-20 range (schema defaults to 20,
+  override per-user via profiles.pair_cap)
+
+## Done
+
+- Schema: supabase/schema.sql (profiles, watchlist_items, signals,
+  signal_deliveries, DB-level cap trigger, RLS policies). Not yet run against a
+  live Supabase project.
+- db.js implemented against that schema, including per-user per-stage delivery
+  tracking so repeat scan passes don't spam the same notification.
