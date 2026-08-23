@@ -1,0 +1,9 @@
+{
+  "name": "@reversal-scanner/detector",
+  "version": "0.1.0",
+  "description": "Source-agnostic double top / double bottom detection engine",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/double-top.test.js && node test/double-bottom.test.js"
+  }
+}

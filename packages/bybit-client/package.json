@@ -1,0 +1,7 @@
+{
+  "name": "@reversal-scanner/bybit-client",
+  "version": "0.1.0",
+  "description": "Minimal Bybit v5 public REST client (klines, instrument list)",
+  "main": "index.js",
+  "engines": { "node": ">=18" }
+}

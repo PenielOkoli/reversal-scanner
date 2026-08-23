@@ -1,0 +1,16 @@
+{
+  "name": "@reversal-scanner/worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "dependencies": {
+    "@reversal-scanner/detector": "*",
+    "@reversal-scanner/bybit-client": "*",
+    "node-cron": "^3.0.3",
+    "@supabase/supabase-js": "^2.45.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "web-push": "^3.6.7",
+    "dotenv": "^16.4.5"
+  }
+}
