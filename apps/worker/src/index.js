@@ -1,5 +1,6 @@
 require("dotenv").config();
 const cron = require("node-cron");
+require("./telegram-bot"); // starts polling for /start (account linking) as a side effect
 const { runScanPass } = require("./scan");
 
 const schedule = process.env.SCAN_CRON || "*/5 * * * *";

@@ -8,6 +8,8 @@ create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   telegram_chat_id text,
   telegram_enabled boolean not null default false,
+  telegram_link_token text unique,
+  telegram_link_token_expires_at timestamptz,
   push_subscription jsonb,
   push_enabled boolean not null default false,
   in_app_enabled boolean not null default true,
@@ -117,3 +119,19 @@ create policy "Authenticated users can read signals" on public.signals
 alter table public.signal_deliveries enable row level security;
 create policy "Users can read their own delivery log" on public.signal_deliveries
   for select using (auth.uid() = user_id);
+
+-- Short-lived, single-use tokens for linking a dashboard account to a
+-- Telegram chat via a deep link (t.me/<bot>?start=<token>).
+create table public.telegram_link_tokens (
+  token text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '15 minutes'),
+  used_at timestamptz
+);
+
+alter table public.telegram_link_tokens enable row level security;
+create policy "Users can create their own link token" on public.telegram_link_tokens
+  for insert with check (auth.uid() = user_id);
+-- No select/update policy for regular users on purpose. Only the worker's
+-- service role key (the bot process) reads and consumes tokens.

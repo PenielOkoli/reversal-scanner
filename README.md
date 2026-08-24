@@ -37,5 +37,6 @@ first real test needs to happen outside this scaffold's build environment.
       signal table. Typechecked and build-verified (fonts need real internet
       access to Google Fonts, unavailable in the build sandbox, verified
       separately with a stand-in font)
-- [ ] Telegram bot linking flow
+- [x] Telegram bot linking flow: dashboard generates a token, deep-links to
+      the bot, worker's bot (polling mode) confirms and saves the chat id
 - [ ] Push notification subscription flow

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PairSelector } from "@/components/PairSelector";
 import { SignalTable } from "@/components/SignalTable";
 import { SignOutButton } from "@/components/SignOutButton";
+import { NotificationSettings } from "@/components/NotificationSettings";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -13,7 +14,7 @@ export default async function DashboardPage() {
   if (!user) redirect("/login");
 
   const [{ data: profile }, { data: watchlistItems }] = await Promise.all([
-    supabase.from("profiles").select("pair_cap").eq("id", user.id).maybeSingle(),
+    supabase.from("profiles").select("pair_cap, telegram_enabled").eq("id", user.id).maybeSingle(),
     supabase.from("watchlist_items").select("id, symbol, timeframe").order("symbol"),
   ]);
 
@@ -51,6 +52,7 @@ export default async function DashboardPage() {
 
         <aside>
           <PairSelector initialItems={items} pairCap={profile?.pair_cap ?? 20} />
+          <NotificationSettings telegramEnabled={profile?.telegram_enabled ?? false} />
         </aside>
       </div>
     </main>

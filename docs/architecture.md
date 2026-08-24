@@ -50,3 +50,9 @@
   a 3-segment StageMeter as the signature element for the developing/
   candidate/confirmed progression. Pair selector enforces the pair cap
   client-side and relies on the DB trigger as the real backstop.
+- Telegram account linking: dashboard generates a short-lived token
+  (profiles.telegram_link_token, 10 min expiry), opens
+  t.me/<bot>?start=<token>. The worker's bot (apps/worker/src/telegram-bot.js)
+  runs in polling mode, matches the token on /start, and saves the chat id.
+  Same worker process, not a separate webhook service. The dashboard polls
+  for confirmation every 3s while waiting instead of requiring a manual refresh.
