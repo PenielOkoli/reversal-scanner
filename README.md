@@ -39,4 +39,5 @@ first real test needs to happen outside this scaffold's build environment.
       separately with a stand-in font)
 - [x] Telegram bot linking flow: dashboard generates a token, deep-links to
       the bot, worker's bot (polling mode) confirms and saves the chat id
-- [ ] Push notification subscription flow
+- [x] Push notification subscription flow: service worker, VAPID subscribe/
+      unsubscribe, saved to profiles.push_subscription

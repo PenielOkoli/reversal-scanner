@@ -56,3 +56,7 @@
   runs in polling mode, matches the token on /start, and saves the chat id.
   Same worker process, not a separate webhook service. The dashboard polls
   for confirmation every 3s while waiting instead of requiring a manual refresh.
+- Push notifications: public/sw.js handles the push/notificationclick events,
+  src/lib/push.ts wraps the subscribe/unsubscribe flow (Notification
+  permission + PushManager + VAPID key), subscription JSON saved straight to
+  profiles.push_subscription and read by apps/worker/src/notify/push.js.
