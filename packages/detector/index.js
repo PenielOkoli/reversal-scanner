@@ -92,6 +92,54 @@ function avgVolume(candles, fromIndex, toIndex) {
   return slice.reduce((s, c) => s + c.volume, 0) / slice.length;
 }
 
+// ---------- Funding rate & open interest confluence ----------
+
+/**
+ * Is funding persistently one-sided across recent periods? Crowded longs
+ * paying up into a double top, or crowded shorts paying up into a double
+ * bottom, is the same "trapped positioning" read this strategy already
+ * trades manually, just applied to the pattern instead of a raw pump.
+ *
+ * @param {Array} fundingRates  chronological [{ time, fundingRate }], fundingRate as a fraction
+ * @param {boolean} isTop
+ * @param {number} extremeThreshold  e.g. 0.0005 = 0.05%, both directions
+ */
+function evaluateFundingConfluence(fundingRates, isTop, extremeThreshold) {
+  if (!fundingRates || !fundingRates.length) {
+    return { available: false, extreme: false, avgRate: null };
+  }
+  const avgRate = fundingRates.reduce((s, f) => s + f.fundingRate, 0) / fundingRates.length;
+  const extreme = isTop ? avgRate >= extremeThreshold : avgRate <= -extremeThreshold;
+  return { available: true, extreme, avgRate: Number(avgRate.toFixed(6)) };
+}
+
+/**
+ * Is open interest building or unwinding across the pattern's formation
+ * window? Rising OI into either extreme means fresh positioning is piling
+ * into the move, i.e. exactly the crowd that gets squeezed on a reversal,
+ * so "building" is confluence-supportive for both double tops and bottoms.
+ *
+ * @param {Array} openInterest  chronological [{ time, openInterest }]
+ * @param {number} fromTime  ms timestamp of the first extreme
+ * @param {number} toTime    ms timestamp of the second extreme
+ */
+function evaluateOpenInterestTrend(openInterest, fromTime, toTime) {
+  if (!openInterest || !openInterest.length) {
+    return { available: false, trend: "unknown", changePercent: null };
+  }
+  const window = openInterest.filter((p) => p.time >= fromTime && p.time <= toTime);
+  const points = window.length >= 2 ? window : openInterest;
+  if (points.length < 2 || !points[0].openInterest) {
+    return { available: false, trend: "unknown", changePercent: null };
+  }
+
+  const change = (points[points.length - 1].openInterest - points[0].openInterest) / points[0].openInterest;
+  let trend = "flat";
+  if (change >= 0.1) trend = "building";
+  else if (change <= -0.1) trend = "unwinding";
+  return { available: true, trend, changePercent: Number((change * 100).toFixed(2)) };
+}
+
 // ---------- Config ----------
 
 const DEFAULTS = {
@@ -101,6 +149,7 @@ const DEFAULTS = {
   maxSeparationBars: 120, // maximum bars between the two extremes (avoid pairing ancient peaks)
   rsiPeriod: 14,
   developingProximityPct: 1.5, // how close live price must get to the first extreme to flag "developing"
+  fundingExtremeThreshold: 0.0005, // 0.05% avg funding rate, either direction, counts as "crowded"
 };
 
 /**
@@ -109,9 +158,11 @@ const DEFAULTS = {
  * @param {Array} candles  chronological OHLCV array, oldest first
  * @param {Object} meta    { symbol, timeframe } - passed straight through onto each signal
  * @param {Object} opts    override any DEFAULTS
+ * @param {Object} confluence  optional { fundingRates, openInterest } from bybit-client,
+ *   symbol-level data (not timeframe-specific) used to grade signal quality
  * @returns {Array} signal objects
  */
-function scanForPatterns(candles, meta = {}, opts = {}) {
+function scanForPatterns(candles, meta = {}, opts = {}, confluence = {}) {
   const cfg = { ...DEFAULTS, ...opts };
   if (candles.length < cfg.swingLookback * 2 + cfg.minSeparationBars) return [];
 
@@ -119,8 +170,8 @@ function scanForPatterns(candles, meta = {}, opts = {}) {
   const { swingHighs, swingLows } = findSwingPoints(candles, cfg.swingLookback);
 
   const signals = [];
-  signals.push(...scanSide(candles, rsi, swingHighs, "double_top", meta, cfg));
-  signals.push(...scanSide(candles, rsi, swingLows, "double_bottom", meta, cfg));
+  signals.push(...scanSide(candles, rsi, swingHighs, "double_top", meta, cfg, confluence));
+  signals.push(...scanSide(candles, rsi, swingLows, "double_bottom", meta, cfg, confluence));
 
   // Highest-confidence signal per (patternType + first extreme) wins, so a
   // developing setup that later got a confirmed second test doesn't show twice.
@@ -133,7 +184,7 @@ function scanForPatterns(candles, meta = {}, opts = {}) {
   return [...best.values()].sort((a, b) => a.firstExtreme.index - b.firstExtreme.index);
 }
 
-function scanSide(candles, rsi, swingPoints, patternType, meta, cfg) {
+function scanSide(candles, rsi, swingPoints, patternType, meta, cfg, confluence) {
   const isTop = patternType === "double_top";
   const results = [];
   const lastIndex = candles.length - 1;
@@ -149,7 +200,7 @@ function scanSide(candles, rsi, swingPoints, patternType, meta, cfg) {
       if (barsApart > cfg.maxSeparationBars) break;
       if (pctDiff(first.price, second.price) > cfg.extremeTolerancePct) continue;
 
-      const signal = buildSignal({ candles, rsi, first, second, patternType, meta, cfg, secondConfirmed: true });
+      const signal = buildSignal({ candles, rsi, first, second, patternType, meta, cfg, secondConfirmed: true, confluence });
       if (signal) results.push(signal);
     }
 
@@ -181,6 +232,7 @@ function scanSide(candles, rsi, swingPoints, patternType, meta, cfg) {
       meta,
       cfg,
       secondConfirmed: false,
+      confluence,
     });
     if (signal) results.push(signal);
   }
@@ -188,7 +240,7 @@ function scanSide(candles, rsi, swingPoints, patternType, meta, cfg) {
   return results;
 }
 
-function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, secondConfirmed }) {
+function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, secondConfirmed, confluence = {} }) {
   const isTop = patternType === "double_top";
 
   const between = candles.slice(first.index + 1, second.index);
@@ -219,9 +271,19 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
   const afterSecond = candles.slice(second.index + 1);
   const necklineBroken = afterSecond.some((c) => (isTop ? c.close < neckline : c.close > neckline));
 
+  const fundingConfluence = evaluateFundingConfluence(
+    confluence.fundingRates,
+    isTop,
+    cfg.fundingExtremeThreshold
+  );
+  const openInterestTrend = evaluateOpenInterestTrend(confluence.openInterest, first.time, second.time);
+
+  const volumeMatch = volumeTrend === (isTop ? "weakening" : "increasing");
+  const oiMatch = openInterestTrend.trend === "building";
+
   let stage;
   if (necklineBroken) stage = "confirmed";
-  else if (secondConfirmed || rsiDivergence || volumeTrend === (isTop ? "weakening" : "increasing")) {
+  else if (secondConfirmed || rsiDivergence || volumeMatch || fundingConfluence.extreme || oiMatch) {
     stage = "candidate";
   } else {
     stage = "developing";
@@ -229,11 +291,13 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
 
   // Starting-point confidence heuristic. Tune the weights against the
   // backtester once real accuracy numbers come in, don't ship this as-is.
-  let confidence = 40;
-  if (secondConfirmed) confidence += 15;
-  if (rsiDivergence) confidence += 20;
-  if (volumeTrend === (isTop ? "weakening" : "increasing")) confidence += 15;
-  if (necklineBroken) confidence += 10;
+  let confidence = 35;
+  if (secondConfirmed) confidence += 12;
+  if (rsiDivergence) confidence += 15;
+  if (volumeMatch) confidence += 12;
+  if (necklineBroken) confidence += 8;
+  if (fundingConfluence.extreme) confidence += 10;
+  if (oiMatch) confidence += 8;
   confidence = Math.min(confidence, 99);
 
   return {
@@ -247,6 +311,8 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
     barsApart: second.index - first.index,
     rsiDivergence,
     volumeTrend,
+    fundingConfluence,
+    openInterestTrend,
     neckline: Number(neckline.toFixed(8)),
     necklineBroken,
     confidence,
@@ -254,4 +320,10 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
   };
 }
 
-module.exports = { scanForPatterns, calculateRSI, findSwingPoints };
+module.exports = {
+  scanForPatterns,
+  calculateRSI,
+  findSwingPoints,
+  evaluateFundingConfluence,
+  evaluateOpenInterestTrend,
+};

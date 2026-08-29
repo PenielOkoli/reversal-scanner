@@ -65,4 +65,70 @@ async function getLinearSymbols() {
   return body.result.list.filter((i) => i.status === "Trading").map((i) => i.symbol);
 }
 
-module.exports = { getKlines, getLinearSymbols, TIMEFRAME_MAP, BASE_URL };
+/**
+ * Recent funding rate history for a symbol. Bybit settles funding every
+ * 8h on most linear perps, so a handful of periods is enough to see
+ * whether longs/shorts have been persistently paying up, not just a
+ * single noisy reading.
+ *
+ * @param {Object} params
+ * @param {string} params.symbol
+ * @param {string} [params.category] "linear" by default
+ * @param {number} [params.limit]    funding periods to fetch, max 200 per Bybit
+ * @returns {Promise<Array>} chronological (oldest first) [{ time, fundingRate }]
+ *   fundingRate is a fraction, e.g. 0.0001 = 0.01%
+ */
+async function getFundingRateHistory({ symbol, category = "linear", limit = 3 }) {
+  const url = `${BASE_URL}/v5/market/funding/history?category=${category}&symbol=${symbol}&limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Bybit funding history request failed: HTTP ${res.status}`);
+
+  const body = await res.json();
+  if (body.retCode !== 0) throw new Error(`Bybit error ${body.retCode}: ${body.retMsg}`);
+
+  return body.result.list
+    .slice()
+    .reverse()
+    .map((f) => ({
+      time: Number(f.fundingRateTimestamp),
+      fundingRate: Number(f.fundingRate),
+    }));
+}
+
+/**
+ * Recent open interest history for a symbol, used to see whether
+ * positioning is building or unwinding across a pattern's formation
+ * window. Independent of chart timeframe, this is exchange-wide OI.
+ *
+ * @param {Object} params
+ * @param {string} params.symbol
+ * @param {string} [params.category]     "linear" by default
+ * @param {string} [params.intervalTime] "5min" | "15min" | "30min" | "1h" | "4h" | "1d"
+ * @param {number} [params.limit]        snapshots to fetch, max 200 per Bybit
+ * @returns {Promise<Array>} chronological (oldest first) [{ time, openInterest }]
+ */
+async function getOpenInterest({ symbol, category = "linear", intervalTime = "1h", limit = 200 }) {
+  const url = `${BASE_URL}/v5/market/open-interest?category=${category}&symbol=${symbol}&intervalTime=${intervalTime}&limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Bybit open interest request failed: HTTP ${res.status}`);
+
+  const body = await res.json();
+  if (body.retCode !== 0) throw new Error(`Bybit error ${body.retCode}: ${body.retMsg}`);
+
+  return body.result.list
+    .slice()
+    .reverse()
+    .map((o) => ({
+      time: Number(o.timestamp),
+      openInterest: Number(o.openInterest),
+    }));
+}
+
+module.exports = {
+  getKlines,
+  getLinearSymbols,
+  getFundingRateHistory,
+  getOpenInterest,
+  TIMEFRAME_MAP,
+  BASE_URL,
+};

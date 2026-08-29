@@ -1,5 +1,5 @@
 const { scanForPatterns } = require("@reversal-scanner/detector");
-const { getKlines } = require("@reversal-scanner/bybit-client");
+const { getKlines, getFundingRateHistory, getOpenInterest } = require("@reversal-scanner/bybit-client");
 const {
   getActiveWatchlistCombos,
   getSubscribersFor,
@@ -11,6 +11,32 @@ const { sendTelegramSignal } = require("./notify/telegram");
 const { sendPushSignal } = require("./notify/push");
 
 /**
+ * Funding rate and open interest are per-symbol, not per-timeframe, but
+ * the same symbol shows up once per selected timeframe in the combo list
+ * (a user watching BTCUSDT on 4h/1h/15m all counts as three combos). Cache
+ * per pass so each symbol only costs two extra Bybit calls total, not one
+ * per timeframe.
+ */
+async function getConfluence(symbol, cache) {
+  if (cache.has(symbol)) return cache.get(symbol);
+
+  let confluence = {};
+  try {
+    const [fundingRates, openInterest] = await Promise.all([
+      getFundingRateHistory({ symbol, limit: 3 }),
+      getOpenInterest({ symbol, intervalTime: "1h", limit: 200 }),
+    ]);
+    confluence = { fundingRates, openInterest };
+  } catch (err) {
+    console.error(`Failed to fetch funding/OI for ${symbol}:`, err.message);
+    // Missing confluence data shouldn't block the scan, the detector treats
+    // it as unavailable and just skips those two factors for this symbol.
+  }
+  cache.set(symbol, confluence);
+  return confluence;
+}
+
+/**
  * One scan pass: union of every selected (symbol, timeframe) across every
  * user, fetched and scanned once, results fanned out to whoever's
  * subscribed and hasn't already been notified at this stage. Keeps Bybit
@@ -18,6 +44,7 @@ const { sendPushSignal } = require("./notify/push");
  */
 async function runScanPass() {
   const combos = await getActiveWatchlistCombos();
+  const confluenceCache = new Map();
 
   for (const { symbol, timeframe } of combos) {
     let candles;
@@ -28,7 +55,8 @@ async function runScanPass() {
       continue;
     }
 
-    const signals = scanForPatterns(candles, { symbol, timeframe });
+    const confluence = await getConfluence(symbol, confluenceCache);
+    const signals = scanForPatterns(candles, { symbol, timeframe }, {}, confluence);
     for (const signal of signals) {
       const { signalId } = await saveSignal(signal);
       const subscribers = await getSubscribersFor(symbol, timeframe);

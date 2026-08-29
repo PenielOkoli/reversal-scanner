@@ -60,3 +60,13 @@
   src/lib/push.ts wraps the subscribe/unsubscribe flow (Notification
   permission + PushManager + VAPID key), subscription JSON saved straight to
   profiles.push_subscription and read by apps/worker/src/notify/push.js.
+- Funding rate + open interest confluence: worker fetches recent funding
+  rate history and open interest history per symbol (once per pass, cached
+  across timeframes since both are symbol-level, not timeframe-level) and
+  passes them into scanForPatterns. Persistently one-sided funding
+  (crowded longs into a top, crowded shorts into a bottom) and open
+  interest building through the pattern's formation window both count as
+  confluence: each can promote a signal from developing to candidate on
+  its own, and each adds to the confidence score. Missing/unavailable
+  data degrades gracefully, the detector just skips those two factors
+  rather than failing the scan.

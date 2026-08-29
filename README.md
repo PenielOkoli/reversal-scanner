@@ -41,3 +41,4 @@ first real test needs to happen outside this scaffold's build environment.
       the bot, worker's bot (polling mode) confirms and saves the chat id
 - [x] Push notification subscription flow: service worker, VAPID subscribe/
       unsubscribe, saved to profiles.push_subscription
+- [x] Funding rate + open interest confluence signal grading
