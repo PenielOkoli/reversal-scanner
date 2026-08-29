@@ -70,3 +70,8 @@
   its own, and each adds to the confidence score. Missing/unavailable
   data degrades gracefully, the detector just skips those two factors
   rather than failing the scan.
+- Confluence surfaced in the dashboard: signals table stores
+  funding_confluence and open_interest_trend as jsonb, dashboard selects
+  them, SignalTable renders a small badge under the pattern name when a
+  factor actually fired (funding extreme, or OI building) - a row with no
+  badges just means neither confluence factor was present, not an error.

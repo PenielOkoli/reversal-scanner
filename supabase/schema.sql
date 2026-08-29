@@ -51,6 +51,8 @@ create table public.signals (
   neckline numeric not null,
   neckline_broken boolean not null,
   confidence integer not null,
+  funding_confluence jsonb,
+  open_interest_trend jsonb,
   detected_at bigint not null,
   updated_at timestamptz not null default now(),
   unique (symbol, timeframe, pattern_type, first_extreme_index)

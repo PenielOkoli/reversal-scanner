@@ -24,7 +24,9 @@ export default async function DashboardPage() {
   const { data: rawSignals } = symbols.length
     ? await supabase
         .from("signals")
-        .select("id, symbol, timeframe, pattern_type, stage, confidence, neckline, neckline_broken, updated_at")
+        .select(
+          "id, symbol, timeframe, pattern_type, stage, confidence, neckline, neckline_broken, funding_confluence, open_interest_trend, updated_at"
+        )
         .in("symbol", symbols)
         .order("updated_at", { ascending: false })
     : { data: [] };

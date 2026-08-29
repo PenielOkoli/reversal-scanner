@@ -65,6 +65,8 @@ async function saveSignal(signal) {
     neckline: signal.neckline,
     neckline_broken: signal.necklineBroken,
     confidence: signal.confidence,
+    funding_confluence: signal.fundingConfluence,
+    open_interest_trend: signal.openInterestTrend,
     detected_at: signal.detectedAt,
     updated_at: new Date().toISOString(),
   };
