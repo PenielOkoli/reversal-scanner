@@ -74,6 +74,23 @@ create table public.signal_deliveries (
   primary key (signal_id, user_id, stage_notified)
 );
 
+-- Auto-create a matching profiles row the moment someone signs up, so
+-- notification settings, pair cap, etc. always have somewhere to live.
+-- Without this, a fresh signup can add watchlist items fine (the cap
+-- trigger below falls back to a default) but can never enable Telegram
+-- or push, since an UPDATE against a nonexistent row just touches nothing.
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id) values (new.id);
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
 -- Enforce the per-user pair cap (15-20, confirmed with the client) at the
 -- database level so it can't be bypassed by a buggy or malicious client.
 create or replace function public.enforce_watchlist_cap()
