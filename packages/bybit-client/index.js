@@ -56,14 +56,22 @@ async function getKlines({ symbol, timeframe, category = "linear", limit = 200 }
  * populating the pair selector.
  */
 async function getLinearSymbols() {
-  const url = `${BASE_URL}/v5/market/instruments-info?category=linear`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Bybit instruments request failed: HTTP ${res.status}`);
+  const symbols = [];
+  let cursor = "";
 
-  const body = await res.json();
-  if (body.retCode !== 0) throw new Error(`Bybit error ${body.retCode}: ${body.retMsg}`);
+  do {
+    const url = `${BASE_URL}/v5/market/instruments-info?category=linear&limit=1000${cursor ? `&cursor=${cursor}` : ""}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Bybit instruments request failed: HTTP ${res.status}`);
 
-  return body.result.list.filter((i) => i.status === "Trading").map((i) => i.symbol);
+    const body = await res.json();
+    if (body.retCode !== 0) throw new Error(`Bybit error ${body.retCode}: ${body.retMsg}`);
+
+    symbols.push(...body.result.list.filter((i) => i.status === "Trading").map((i) => i.symbol));
+    cursor = body.result.nextPageCursor;
+  } while (cursor);
+
+  return symbols;
 }
 
 /**
