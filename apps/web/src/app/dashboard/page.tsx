@@ -15,26 +15,23 @@ export default async function DashboardPage() {
 
   const [{ data: profile }, { data: watchlistItems }] = await Promise.all([
     supabase.from("profiles").select("pair_cap, telegram_enabled, push_enabled").eq("id", user.id).maybeSingle(),
-    supabase.from("watchlist_items").select("id, symbol, timeframe").order("symbol"),
+    supabase.from("watchlist_items").select("id, symbol").order("symbol"),
   ]);
 
   const items = watchlistItems ?? [];
-  const symbols = [...new Set(items.map((i) => i.symbol))];
+  const symbols = items.map((i) => i.symbol);
 
   const { data: rawSignals } = symbols.length
     ? await supabase
         .from("signals")
         .select(
-          "id, symbol, timeframe, pattern_type, stage, confidence, neckline, neckline_broken, funding_confluence, open_interest_trend, updated_at"
+          "id, symbol, timeframe, entry_timeframe, zone_low, zone_high, pattern_type, stage, confidence, neckline, neckline_broken, funding_confluence, open_interest_trend, updated_at"
         )
         .in("symbol", symbols)
         .order("updated_at", { ascending: false })
     : { data: [] };
 
-  // Signals are per (symbol, timeframe) globally, only show the ones that
-  // match a timeframe the user actually selected for that symbol.
-  const watchedCombos = new Set(items.map((i) => `${i.symbol}:${i.timeframe}`));
-  const signals = (rawSignals ?? []).filter((s) => watchedCombos.has(`${s.symbol}:${s.timeframe}`));
+  const signals = rawSignals ?? [];
 
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">

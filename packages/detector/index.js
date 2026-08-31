@@ -147,6 +147,8 @@ const DEFAULTS = {
   extremeTolerancePct: 2, // how close two extremes must be to count as "double"
   minSeparationBars: 5, // minimum bars between the two extremes
   maxSeparationBars: 120, // maximum bars between the two extremes (avoid pairing ancient peaks)
+  maxBarsFromNow: 40, // second extreme must be within this many bars of the live edge, a
+  // pattern that finished this many candles ago is stale, not a current setup
   rsiPeriod: 14,
   developingProximityPct: 1.5, // how close live price must get to the first extreme to flag "developing"
   fundingExtremeThreshold: 0.0005, // 0.05% avg funding rate, either direction, counts as "crowded"
@@ -194,11 +196,11 @@ function scanSide(candles, rsi, swingPoints, patternType, meta, cfg, confluence)
 
     // Confirmed second extreme -> Candidate or Confirmed.
     for (let b = a + 1; b < swingPoints.length; b++) {
-      const second = swingPoints[b];
       const barsApart = second.index - first.index;
       if (barsApart < cfg.minSeparationBars) continue;
       if (barsApart > cfg.maxSeparationBars) break;
       if (pctDiff(first.price, second.price) > cfg.extremeTolerancePct) continue;
+      if (lastIndex - second.index > cfg.maxBarsFromNow) continue; // stale, not a current setup
 
       const signal = buildSignal({ candles, rsi, first, second, patternType, meta, cfg, secondConfirmed: true, confluence });
       if (signal) results.push(signal);
@@ -268,9 +270,13 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
     else if (change >= 0.1) volumeTrend = "increasing";
   }
 
-  const afterSecond = candles.slice(second.index + 1);
-  const necklineBroken = afterSecond.some((c) => (isTop ? c.close < neckline : c.close > neckline));
-
+  // Whether price is CURRENTLY beyond the neckline, not whether it ever
+  // was at some point in the past. Checking "ever" is how an old, unrelated
+  // double top and an old, unrelated double bottom can both show as
+  // "confirmed" at once, price can only be on one side of the market right now.
+  const latestClose = candles[candles.length - 1].close;
+  const necklineBroken = isTop ? latestClose < neckline : latestClose > neckline;
+  
   const fundingConfluence = evaluateFundingConfluence(
     confluence.fundingRates,
     isTop,
@@ -320,10 +326,134 @@ function buildSignal({ candles, rsi, first, second, patternType, meta, cfg, seco
   };
 }
 
+// ---------- Bias + entry multi-timeframe analysis ----------
+
+const BIAS_TIMEFRAMES = ["4h", "1h"];
+const ENTRY_TIMEFRAMES = ["15m", "5m"];
+const STAGE_RANK = { developing: 0, candidate: 1, confirmed: 2 };
+const ZONE_TOLERANCE_PCT = 3; // how far outside the bias's own range an entry can sit and still count
+
+/**
+ * The price range a pattern is actually defending: for a top, that's
+ * between its neckline and its peak (the supply zone a breakdown would
+ * come from); for a bottom, between its trough and its neckline (the
+ * demand zone a bounce would come from).
+ */
+function getZone(signal, isTop) {
+  const extremePrice = isTop
+    ? Math.max(signal.firstExtreme.price, signal.secondExtreme.price)
+    : Math.min(signal.firstExtreme.price, signal.secondExtreme.price);
+  return isTop ? { low: signal.neckline, high: extremePrice } : { low: extremePrice, high: signal.neckline };
+}
+
+/**
+ * Traditional multi-timeframe technical analysis: higher timeframes (4h,
+ * 1h) set the overall directional bias, lower timeframes (15m, 5m) are
+ * where an actual entry is watched for within that bias, not four
+ * independent, equally-weighted votes on the same coin. A "confirmed"
+ * pattern on one timeframe and a completely opposite one both showing as
+ * fresh and actionable at the same time is exactly the meaningless output
+ * this replaces.
+ *
+ * An entry only counts if it's happening at the same price zone the bias
+ * is defending, not just facing the same direction. A 4h double top at
+ * $70k and a 15m double top at $50k are both "bearish" but have nothing
+ * to do with each other, the higher timeframe holds more weight precisely
+ * because it's the level that matters, an entry only means something if
+ * it's reacting to that same level.
+ *
+ * A direction is only surfaced at all if a higher timeframe shows some
+ * reading in it, there's no signal without a bias. From there:
+ *   - no lower-timeframe reading in the bias's zone yet -> "developing":
+ *     bias exists, still watching for an entry to set up there
+ *   - a lower-timeframe reading in that zone exists but hasn't broken its
+ *     neckline at the current price yet -> "candidate": an entry is forming
+ *   - a lower-timeframe reading in that zone HAS broken its neckline at
+ *     the current price -> "confirmed": bias and a live entry are aligned
+ *     right now, at the level that matters
+ *
+ * @param {Object} signalsByTimeframe  { "4h": [...], "1h": [...], "15m": [...], "5m": [...] }
+ * @returns {Array} up to one signal per pattern type (double_top, double_bottom)
+ */
+function analyzeSymbol(signalsByTimeframe) {
+  const results = [];
+
+  for (const patternType of ["double_top", "double_bottom"]) {
+    const isTop = patternType === "double_top";
+    const biasCandidates = BIAS_TIMEFRAMES.flatMap((tf) =>
+      (signalsByTimeframe[tf] || []).filter((s) => s.patternType === patternType)
+    );
+    if (!biasCandidates.length) continue; // no higher-timeframe context, nothing to report
+
+    const bias = biasCandidates.reduce((best, s) => {
+      if (STAGE_RANK[s.stage] !== STAGE_RANK[best.stage]) {
+        return STAGE_RANK[s.stage] > STAGE_RANK[best.stage] ? s : best;
+      }
+      return s.confidence > best.confidence ? s : best;
+    });
+
+    const biasZone = getZone(bias, isTop);
+    const tolerance = ZONE_TOLERANCE_PCT / 100;
+    const zoneLow = biasZone.low * (1 - tolerance);
+    const zoneHigh = biasZone.high * (1 + tolerance);
+
+    const entryCandidates = ENTRY_TIMEFRAMES.flatMap((tf) =>
+      (signalsByTimeframe[tf] || []).filter((s) => s.patternType === patternType)
+    ).filter((s) => {
+      const entryZone = getZone(s, isTop);
+      return entryZone.high >= zoneLow && entryZone.low <= zoneHigh; // ranges overlap
+    });
+    const entry = entryCandidates.length
+      ? entryCandidates.reduce((best, s) => (s.confidence > best.confidence ? s : best))
+      : null;
+
+    let stage;
+    let confidence;
+    if (entry && entry.necklineBroken) {
+      stage = "confirmed";
+      confidence = Math.min(Math.round(bias.confidence * 0.4 + entry.confidence * 0.6) + 10, 99);
+    } else if (entry) {
+      stage = "candidate";
+      confidence = Math.min(Math.round((bias.confidence + entry.confidence) / 2), 99);
+    } else {
+      stage = "developing";
+      confidence = bias.confidence;
+    }
+
+    const base = entry || bias;
+    results.push({
+      symbol: base.symbol,
+      patternType,
+      stage,
+      confidence,
+      timeframe: bias.timeframe,
+      biasStage: bias.stage,
+      entryTimeframe: entry ? entry.timeframe : null,
+      zoneLow: Number(biasZone.low.toFixed(8)),
+      zoneHigh: Number(biasZone.high.toFixed(8)),
+      firstExtreme: base.firstExtreme,
+      secondExtreme: base.secondExtreme,
+      distancePercent: base.distancePercent,
+      barsApart: base.barsApart,
+      rsiDivergence: base.rsiDivergence,
+      volumeTrend: base.volumeTrend,
+      fundingConfluence: base.fundingConfluence,
+      openInterestTrend: base.openInterestTrend,
+      neckline: base.neckline,
+      necklineBroken: base.necklineBroken,
+      detectedAt: base.detectedAt,
+    });
+  }
+
+  return results;
+}
+
 module.exports = {
   scanForPatterns,
   calculateRSI,
   findSwingPoints,
   evaluateFundingConfluence,
   evaluateOpenInterestTrend,
+  analyzeSymbol,
+  getZone,
 };

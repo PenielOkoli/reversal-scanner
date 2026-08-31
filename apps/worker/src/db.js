@@ -5,31 +5,21 @@ const { createClient } = require("@supabase/supabase-js");
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Every (symbol, timeframe) currently selected by at least one user,
-// deduplicated. This is what the worker actually polls Bybit for.
-async function getActiveWatchlistCombos() {
-  const { data, error } = await supabase.from("watchlist_items").select("symbol, timeframe");
+// Every symbol currently selected by at least one user, deduplicated.
+// This is what the worker actually polls Bybit for, on every timeframe.
+async function getActiveSymbols() {
+  const { data, error } = await supabase.from("watchlist_items").select("symbol");
   if (error) throw error;
-
-  const seen = new Set();
-  const combos = [];
-  for (const row of data) {
-    const key = `${row.symbol}:${row.timeframe}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    combos.push({ symbol: row.symbol, timeframe: row.timeframe });
-  }
-  return combos;
+  return [...new Set(data.map((row) => row.symbol))];
 }
 
-// Every user watching a given (symbol, timeframe), with their notification
-// preferences already resolved (null if that channel is off for them).
-async function getSubscribersFor(symbol, timeframe) {
+// Every user watching a given symbol, with their notification preferences
+// already resolved (null if that channel is off for them).
+async function getSubscribersFor(symbol) {
   const { data, error } = await supabase
     .from("watchlist_items")
     .select("user_id, profiles!inner(telegram_chat_id, telegram_enabled, push_subscription, push_enabled)")
-    .eq("symbol", symbol)
-    .eq("timeframe", timeframe);
+    .eq("symbol", symbol);
   if (error) throw error;
 
   return data.map((row) => ({
@@ -39,21 +29,24 @@ async function getSubscribersFor(symbol, timeframe) {
   }));
 }
 
-// Upserts a signal on its natural key (symbol, timeframe, patternType,
-// firstExtreme.index), so the same underlying pattern updates in place as
-// it moves through stages instead of duplicating rows.
+// Upserts a signal on its natural key (symbol, patternType): one row per
+// direction per symbol, the best combined read across every timeframe,
+// updating in place as the picture evolves instead of duplicating rows.
 async function saveSignal(signal) {
   const key = {
     symbol: signal.symbol,
-    timeframe: signal.timeframe,
     pattern_type: signal.patternType,
-    first_extreme_index: signal.firstExtreme.index,
   };
 
   const row = {
     ...key,
+    timeframe: signal.timeframe,
+    entry_timeframe: signal.entryTimeframe || null,
+    zone_low: signal.zoneLow,
+    zone_high: signal.zoneHigh,
     stage: signal.stage,
     first_extreme_price: signal.firstExtreme.price,
+    first_extreme_index: signal.firstExtreme.index,
     first_extreme_time: signal.firstExtreme.time,
     second_extreme_price: signal.secondExtreme.price,
     second_extreme_index: signal.secondExtreme.index,
@@ -73,7 +66,7 @@ async function saveSignal(signal) {
 
   const { data, error } = await supabase
     .from("signals")
-    .upsert(row, { onConflict: "symbol,timeframe,pattern_type,first_extreme_index" })
+    .upsert(row, { onConflict: "symbol,pattern_type" })
     .select("id")
     .single();
   if (error) throw error;
@@ -105,7 +98,7 @@ async function markDelivered(signalId, userId, stage) {
 
 module.exports = {
   supabase,
-  getActiveWatchlistCombos,
+  getActiveSymbols,
   getSubscribersFor,
   saveSignal,
   hasBeenDelivered,

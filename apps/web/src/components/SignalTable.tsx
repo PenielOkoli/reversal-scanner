@@ -7,6 +7,7 @@ type Signal = {
   id: string;
   symbol: string;
   timeframe: string;
+  entry_timeframe: string | null;
   pattern_type: "double_top" | "double_bottom";
   stage: "developing" | "candidate" | "confirmed";
   confidence: number;
@@ -18,18 +19,40 @@ type Signal = {
 };
 
 /**
- * Only surfaces confluence that's actually firing. A signal with flat
- * funding and flat OI shows nothing here rather than "no confluence"
- * noise, so a row with badges is meaningfully stronger than one without,
- * at a glance.
+ * Says what's actually happening in trader terms: which lower timeframe
+ * has an entry, and whether it's live (neckline broken at the current
+ * price) or still forming, plus whatever funding/OI confluence fired.
+ * A signal with no entry yet and no funding/OI confluence shows nothing
+ * here, that's a bias-only "still watching" signal, not an error.
  */
-function ConfluenceBadges({ funding, oi }: { funding: FundingConfluence | null; oi: OpenInterestTrend | null }) {
+function ConfluenceBadges({
+  funding,
+  oi,
+  entryTimeframe,
+  stage,
+}: {
+  funding: FundingConfluence | null;
+  oi: OpenInterestTrend | null;
+  entryTimeframe: string | null;
+  stage: Signal["stage"];
+}) {
   const showFunding = funding?.available && funding.extreme;
   const showOi = oi?.available && oi.trend === "building";
-  if (!showFunding && !showOi) return null;
+  if (!showFunding && !showOi && !entryTimeframe) return null;
 
   return (
     <div className="mt-1 flex flex-wrap gap-1">
+      {entryTimeframe && (
+        <span
+          className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[11px] ${
+            stage === "confirmed"
+              ? "border-accent/30 bg-accent/10 text-accent"
+              : "border-border-subtle bg-bg-surface text-text-muted"
+          }`}
+        >
+          Entry {entryTimeframe} {stage === "confirmed" ? "live" : "forming"}
+        </span>
+      )}
       {showFunding && (
         <span className="inline-flex items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 font-mono text-[11px] text-accent">
           Funding {funding!.avgRate !== null ? `${(funding!.avgRate * 100).toFixed(2)}%` : ""}
@@ -49,9 +72,7 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
     return (
       <div className="rounded-lg border border-dashed border-border-subtle p-10 text-center">
         <p className="text-sm text-text-primary">No signals yet.</p>
-        <p className="mt-1 text-sm text-text-muted">
-          Add a pair and timeframe below, the scanner checks them on its next pass.
-        </p>
+        <p className="mt-1 text-sm text-text-muted">Add a pair below, the scanner checks it on its next pass.</p>
       </div>
     );
   }
@@ -75,13 +96,18 @@ export function SignalTable({ signals }: { signals: Signal[] }) {
               <tr key={s.id} className="border-b border-border-subtle last:border-0 hover:bg-bg-surface">
                 <td className="px-4 py-3 font-mono">
                   {s.symbol}
-                  <span className="ml-2 text-text-muted">{s.timeframe}</span>
+                  <span className="ml-2 text-text-muted">{s.timeframe} bias</span>
                 </td>
                 <td className="px-4 py-3">
                   <span className={direction === "bearish" ? "text-bearish" : "text-bullish"}>
                     {s.pattern_type === "double_top" ? "Double top" : "Double bottom"}
                   </span>
-                  <ConfluenceBadges funding={s.funding_confluence} oi={s.open_interest_trend} />
+                  <ConfluenceBadges
+                    funding={s.funding_confluence}
+                    oi={s.open_interest_trend}
+                    entryTimeframe={s.entry_timeframe}
+                    stage={s.stage}
+                  />
                 </td>
                 <td className="px-4 py-3">
                   <StageMeter stage={s.stage} direction={direction} />

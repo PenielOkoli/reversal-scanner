@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-type WatchlistItem = { id: string; symbol: string; timeframe: string };
-
-const TIMEFRAMES = ["5m", "15m", "1h", "4h"] as const;
+type WatchlistItem = { id: string; symbol: string };
 
 export function PairSelector({
   initialItems,
@@ -21,7 +19,6 @@ export function PairSelector({
   const [items, setItems] = useState(initialItems);
   const [allSymbols, setAllSymbols] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [selectedTimeframes, setSelectedTimeframes] = useState<string[]>(["1h"]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -32,32 +29,21 @@ export function PairSelector({
       .catch(() => setAllSymbols([]));
   }, []);
 
-  const uniqueSymbolCount = useMemo(() => new Set(items.map((i) => i.symbol)).size, [items]);
-
   const matches = useMemo(() => {
     if (!query) return [];
     const q = query.toUpperCase();
     return allSymbols.filter((s) => s.includes(q)).slice(0, 8);
   }, [query, allSymbols]);
 
-  function toggleTimeframe(tf: string) {
-    setSelectedTimeframes((prev) => (prev.includes(tf) ? prev.filter((t) => t !== tf) : [...prev, tf]));
-  }
-
   async function addSymbol(symbol: string) {
     setError(null);
-    if (selectedTimeframes.length === 0) {
-      setError("Pick at least one timeframe first.");
-      return;
-    }
-    if (uniqueSymbolCount >= pairCap && !items.some((i) => i.symbol === symbol)) {
+    if (items.length >= pairCap) {
       setError(`You're at your ${pairCap}-pair limit. Remove one before adding another.`);
       return;
     }
 
     setPending(true);
-    const rows = selectedTimeframes.map((timeframe) => ({ symbol, timeframe }));
-    const { data, error } = await supabase.from("watchlist_items").insert(rows).select("id, symbol, timeframe");
+    const { data, error } = await supabase.from("watchlist_items").insert({ symbol }).select("id, symbol").single();
     setPending(false);
 
     if (error) {
@@ -65,7 +51,7 @@ export function PairSelector({
       return;
     }
 
-    setItems((prev) => [...prev, ...(data ?? [])]);
+    setItems((prev) => [...prev, data]);
     setQuery("");
     router.refresh();
   }
@@ -86,26 +72,12 @@ export function PairSelector({
       <div className="mb-4 flex items-center justify-between">
         <h2 className="font-display text-sm font-semibold tracking-tight text-text-primary">Watchlist</h2>
         <span className="font-mono text-xs text-text-muted">
-          {uniqueSymbolCount} / {pairCap} pairs
+          {items.length} / {pairCap} pairs
         </span>
       </div>
-
-      <div className="mb-3 flex gap-1.5">
-        {TIMEFRAMES.map((tf) => (
-          <button
-            key={tf}
-            type="button"
-            onClick={() => toggleTimeframe(tf)}
-            className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
-              selectedTimeframes.includes(tf)
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border-subtle text-text-muted"
-            }`}
-          >
-            {tf}
-          </button>
-        ))}
-      </div>
+      <p className="mb-3 text-xs text-text-muted">
+        Every pair is scanned across all four timeframes automatically, no need to pick one.
+      </p>
 
       <div className="relative">
         <input
@@ -142,14 +114,12 @@ export function PairSelector({
               key={item.id}
               className="flex items-center justify-between rounded-md border border-border-subtle px-3 py-1.5 font-mono text-sm"
             >
-              <span>
-                {item.symbol} <span className="text-text-muted">{item.timeframe}</span>
-              </span>
+              <span>{item.symbol}</span>
               <button
                 type="button"
                 onClick={() => removeItem(item.id)}
                 className="text-text-muted hover:text-bearish"
-                aria-label={`Remove ${item.symbol} ${item.timeframe}`}
+                aria-label={`Remove ${item.symbol}`}
               >
                 ×
               </button>

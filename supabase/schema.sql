@@ -20,7 +20,7 @@ create table public.profiles (
 -- One row per (user, symbol, timeframe) the user wants monitored.
 create table public.watchlist_items (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null default auth.uid() references public.profiles(id) on delete cascade,
   symbol text not null,
   timeframe text not null check (timeframe in ('5m', '15m', '1h', '4h')),
   created_at timestamptz not null default now(),

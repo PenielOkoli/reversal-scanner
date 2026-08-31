@@ -1,21 +1,26 @@
-const { scanForPatterns } = require("@reversal-scanner/detector");
-const { getKlines, getFundingRateHistory, getOpenInterest } = require("@reversal-scanner/bybit-client");
+const { scanForPatterns, analyzeSymbol } = require("@reversal-scanner/detector");
 const {
-  getActiveWatchlistCombos,
+  getKlines,
+  getFundingRateHistory,
+  getOpenInterest,
+  TIMEFRAME_MAP,
+} = require("@reversal-scanner/bybit-client");
+const {
+  getActiveSymbols,
   getSubscribersFor,
   saveSignal,
   hasBeenDelivered,
   markDelivered,
 } = require("./db");
-const { sendTelegramSignal } = require("./notify/telegram");
-const { sendPushSignal } = require("./notify/push");
+const { sendTelegramDigest } = require("./notify/telegram");
+const { sendPushDigest } = require("./notify/push");
+
+const ALL_TIMEFRAMES = Object.keys(TIMEFRAME_MAP); // ["5m", "15m", "1h", "4h"]
 
 /**
- * Funding rate and open interest are per-symbol, not per-timeframe, but
- * the same symbol shows up once per selected timeframe in the combo list
- * (a user watching BTCUSDT on 4h/1h/15m all counts as three combos). Cache
- * per pass so each symbol only costs two extra Bybit calls total, not one
- * per timeframe.
+ * Funding rate and open interest are symbol-level, not timeframe-level.
+ * Cache per pass so each symbol only costs two extra Bybit calls total,
+ * shared across all four timeframe scans for that symbol.
  */
 async function getConfluence(symbol, cache) {
   if (cache.has(symbol)) return cache.get(symbol);
@@ -37,40 +42,69 @@ async function getConfluence(symbol, cache) {
 }
 
 /**
- * One scan pass: union of every selected (symbol, timeframe) across every
- * user, fetched and scanned once, results fanned out to whoever's
- * subscribed and hasn't already been notified at this stage. Keeps Bybit
- * API usage flat as users are added, instead of one fetch per user per pair.
+ * Scans every timeframe for one symbol and runs the bias+entry analysis
+ * (see detector's analyzeSymbol). Users no longer pick a timeframe,
+ * watching a symbol means watching all of them.
  */
-async function runScanPass() {
-  const combos = await getActiveWatchlistCombos();
-  const confluenceCache = new Map();
+async function scanSymbol(symbol, confluenceCache) {
+  const confluence = await getConfluence(symbol, confluenceCache);
+  const signalsByTimeframe = {};
 
-  for (const { symbol, timeframe } of combos) {
-    let candles;
+  for (const timeframe of ALL_TIMEFRAMES) {
     try {
-      candles = await getKlines({ symbol, timeframe });
+      const candles = await getKlines({ symbol, timeframe });
+      signalsByTimeframe[timeframe] = scanForPatterns(candles, { symbol, timeframe }, {}, confluence);
     } catch (err) {
       console.error(`Failed to fetch ${symbol} ${timeframe}:`, err.message);
-      continue;
+      // Missing one timeframe shouldn't block combining the others.
     }
+  }
 
-    const confluence = await getConfluence(symbol, confluenceCache);
-    const signals = scanForPatterns(candles, { symbol, timeframe }, {}, confluence);
+  return analyzeSymbol(signalsByTimeframe);
+}
+
+/**
+ * One scan pass: union of every watched symbol across every user, each
+ * scanned across all four timeframes and combined into its best signal per
+ * direction, results fanned out to whoever's subscribed. Notifications for
+ * everything a user is newly due to hear about in this pass are collected
+ * and sent as a single digest per channel, not one message per signal, so
+ * a pass that turns up several updates at once doesn't flood anyone.
+ */
+async function runScanPass() {
+  const symbols = await getActiveSymbols();
+  const confluenceCache = new Map();
+  const pendingByUser = new Map(); // userId -> { telegramChatId, pushSubscription, signals: [] }
+
+  function queue(sub, signal) {
+    let entry = pendingByUser.get(sub.userId);
+    if (!entry) {
+      entry = { telegramChatId: sub.telegramChatId, pushSubscription: sub.pushSubscription, signals: [] };
+      pendingByUser.set(sub.userId, entry);
+    }
+    entry.signals.push(signal);
+  }
+
+  for (const symbol of symbols) {
+    const signals = await scanSymbol(symbol, confluenceCache);
+
     for (const signal of signals) {
       const { signalId } = await saveSignal(signal);
-      const subscribers = await getSubscribersFor(symbol, timeframe);
+      const subscribers = await getSubscribersFor(symbol);
 
       for (const sub of subscribers) {
         const already = await hasBeenDelivered(signalId, sub.userId, signal.stage);
         if (already) continue;
 
-        if (sub.telegramChatId) await sendTelegramSignal(sub.telegramChatId, signal).catch(console.error);
-        if (sub.pushSubscription) await sendPushSignal(sub.pushSubscription, signal).catch(console.error);
-
+        queue(sub, signal);
         await markDelivered(signalId, sub.userId, signal.stage);
       }
     }
+  }
+
+  for (const { telegramChatId, pushSubscription, signals } of pendingByUser.values()) {
+    if (telegramChatId) await sendTelegramDigest(telegramChatId, signals).catch(console.error);
+    if (pushSubscription) await sendPushDigest(pushSubscription, signals).catch(console.error);
   }
 }
 
