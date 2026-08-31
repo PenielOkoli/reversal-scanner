@@ -41,9 +41,21 @@ async function saveSignal(signal) {
   const row = {
     ...key,
     timeframe: signal.timeframe,
+    pattern_timeframe: signal.patternTimeframe || null,
+    confirmation_timeframe: signal.confirmationTimeframe || null,
     entry_timeframe: signal.entryTimeframe || null,
     zone_low: signal.zoneLow,
     zone_high: signal.zoneHigh,
+    alert_state: signal.alertState,
+    current_price: signal.currentPrice,
+    trigger_price: signal.triggerPrice,
+    invalidation_price: signal.invalidationPrice,
+    target_price: signal.targetPrice,
+    distance_to_trigger_percent: signal.distanceToTriggerPercent,
+    daily_open: signal.dailyOpen,
+    previous_day_high: signal.previousDayHigh,
+    previous_day_low: signal.previousDayLow,
+    daily_level_confluence: signal.dailyLevelConfluence,
     stage: signal.stage,
     first_extreme_price: signal.firstExtreme.price,
     first_extreme_index: signal.firstExtreme.index,
@@ -78,20 +90,20 @@ async function saveSignal(signal) {
 // same stage across several scan passes doesn't re-notify every pass, but
 // a genuine stage change does, and a user who adds a pair later still gets
 // notified about a signal that already exists on it.
-async function hasBeenDelivered(signalId, userId, stage) {
+async function hasBeenDelivered(signalId, userId, stage, channel) {
   const { data, error } = await supabase
     .from("signal_deliveries")
     .select("signal_id")
-    .match({ signal_id: signalId, user_id: userId, stage_notified: stage })
+    .match({ signal_id: signalId, user_id: userId, stage_notified: stage, channel })
     .maybeSingle();
   if (error) throw error;
   return !!data;
 }
 
-async function markDelivered(signalId, userId, stage) {
+async function markDelivered(signalId, userId, stage, channel) {
   const { error } = await supabase
     .from("signal_deliveries")
-    .insert({ signal_id: signalId, user_id: userId, stage_notified: stage });
+    .insert({ signal_id: signalId, user_id: userId, stage_notified: stage, channel });
   // Unique-violation just means another pass already recorded this, that's fine.
   if (error && error.code !== "23505") throw error;
 }

@@ -15,7 +15,7 @@ const {
 const { sendTelegramDigest } = require("./notify/telegram");
 const { sendPushDigest } = require("./notify/push");
 
-const ALL_TIMEFRAMES = Object.keys(TIMEFRAME_MAP); // ["5m", "15m", "1h", "4h"]
+const SCAN_TIMEFRAMES = ["4h", "1h", "15m", "5m"];
 
 /**
  * Funding rate and open interest are symbol-level, not timeframe-level.
@@ -49,10 +49,12 @@ async function getConfluence(symbol, cache) {
 async function scanSymbol(symbol, confluenceCache) {
   const confluence = await getConfluence(symbol, confluenceCache);
   const signalsByTimeframe = {};
+  const latestPrices = {};
 
-  for (const timeframe of ALL_TIMEFRAMES) {
+  for (const timeframe of SCAN_TIMEFRAMES) {
     try {
       const candles = await getKlines({ symbol, timeframe });
+      latestPrices[timeframe] = candles[candles.length - 1]?.close;
       signalsByTimeframe[timeframe] = scanForPatterns(candles, { symbol, timeframe }, {}, confluence);
     } catch (err) {
       console.error(`Failed to fetch ${symbol} ${timeframe}:`, err.message);
@@ -60,7 +62,26 @@ async function scanSymbol(symbol, confluenceCache) {
     }
   }
 
-  return analyzeSymbol(signalsByTimeframe);
+  let marketLevels;
+  try {
+    const dailyCandles = await getKlines({ symbol, timeframe: "1d", limit: 3 });
+    const currentDaily = dailyCandles[dailyCandles.length - 1];
+    const previousDaily = dailyCandles[dailyCandles.length - 2];
+    if (currentDaily && previousDaily) {
+      marketLevels = {
+        dailyOpen: currentDaily.open,
+        previousDayHigh: previousDaily.high,
+        previousDayLow: previousDaily.low,
+      };
+    }
+  } catch (err) {
+    console.error(`Failed to fetch daily levels for ${symbol}:`, err.message);
+  }
+
+  // Use the freshest candle for price relevance. A 5m close makes stale
+  // higher-timeframe zones expire quickly instead of lingering as context.
+  const currentPrice = latestPrices["5m"] ?? latestPrices["15m"] ?? latestPrices["1h"] ?? latestPrices["4h"];
+  return analyzeSymbol(signalsByTimeframe, currentPrice, { marketLevels });
 }
 
 /**
@@ -74,15 +95,15 @@ async function scanSymbol(symbol, confluenceCache) {
 async function runScanPass() {
   const symbols = await getActiveSymbols();
   const confluenceCache = new Map();
-  const pendingByUser = new Map(); // userId -> { telegramChatId, pushSubscription, signals: [] }
+  const pendingByUser = new Map(); // userId -> { telegramChatId, pushSubscription, telegram: [], push: [] }
 
-  function queue(sub, signal) {
+  function queue(sub, channel, signal, signalId) {
     let entry = pendingByUser.get(sub.userId);
     if (!entry) {
-      entry = { telegramChatId: sub.telegramChatId, pushSubscription: sub.pushSubscription, signals: [] };
+      entry = { telegramChatId: sub.telegramChatId, pushSubscription: sub.pushSubscription, telegram: [], push: [] };
       pendingByUser.set(sub.userId, entry);
     }
-    entry.signals.push(signal);
+    entry[channel].push({ signal, signalId });
   }
 
   for (const symbol of symbols) {
@@ -90,21 +111,46 @@ async function runScanPass() {
 
     for (const signal of signals) {
       const { signalId } = await saveSignal(signal);
+      // A watch is dashboard context, not an interruption. Notify only when
+      // a lower-timeframe setup appears or its breakout actually triggers.
+      if (signal.alertState === "watch") continue;
       const subscribers = await getSubscribersFor(symbol);
 
       for (const sub of subscribers) {
-        const already = await hasBeenDelivered(signalId, sub.userId, signal.stage);
-        if (already) continue;
+        const channels = [
+          sub.telegramChatId ? "telegram" : null,
+          sub.pushSubscription ? "push" : null,
+        ].filter(Boolean);
 
-        queue(sub, signal);
-        await markDelivered(signalId, sub.userId, signal.stage);
+        for (const channel of channels) {
+          const already = await hasBeenDelivered(signalId, sub.userId, signal.alertState, channel);
+          if (!already) queue(sub, channel, signal, signalId);
+        }
       }
     }
   }
 
-  for (const { telegramChatId, pushSubscription, signals } of pendingByUser.values()) {
-    if (telegramChatId) await sendTelegramDigest(telegramChatId, signals).catch(console.error);
-    if (pushSubscription) await sendPushDigest(pushSubscription, signals).catch(console.error);
+  for (const [userId, pending] of pendingByUser.entries()) {
+    async function deliver(channel, send) {
+      const entries = pending[channel];
+      if (!entries.length) return;
+
+      try {
+        await send(entries.map((entry) => entry.signal));
+        // Only persist delivery after the provider confirms the send. A
+        // failed channel remains eligible for a retry on the next scan pass.
+        await Promise.all(entries.map((entry) => markDelivered(entry.signalId, userId, entry.signal.alertState, channel)));
+      } catch (err) {
+        console.error(`Failed to deliver ${channel} signal update for user ${userId}:`, err.message);
+      }
+    }
+
+    if (pending.telegramChatId) {
+      await deliver("telegram", (signals) => sendTelegramDigest(pending.telegramChatId, signals));
+    }
+    if (pending.pushSubscription) {
+      await deliver("push", (signals) => sendPushDigest(pending.pushSubscription, signals));
+    }
   }
 }
 

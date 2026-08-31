@@ -17,25 +17,39 @@ create table public.profiles (
   created_at timestamptz not null default now()
 );
 
--- One row per (user, symbol, timeframe) the user wants monitored.
+-- One row per symbol a user wants monitored. The worker always evaluates
+-- 4h/1h bias plus 15m/5m entry conditions for every watched symbol.
 create table public.watchlist_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references public.profiles(id) on delete cascade,
   symbol text not null,
-  timeframe text not null check (timeframe in ('5m', '15m', '1h', '4h')),
   created_at timestamptz not null default now(),
-  unique (user_id, symbol, timeframe)
+  unique (user_id, symbol)
 );
-create index watchlist_items_symbol_timeframe_idx on public.watchlist_items (symbol, timeframe);
+create index watchlist_items_symbol_idx on public.watchlist_items (symbol);
 
 -- Every detected signal, shared across all users watching that combo.
--- (symbol, timeframe, pattern_type, first_extreme_index) is the natural
--- key: the same underlying pattern updates in place across scan passes
--- (developing -> candidate -> confirmed) rather than duplicating rows.
+-- (symbol, pattern_type) is the natural key: one current, combined read per
+-- direction. It updates in place as price moves from watch -> setup -> triggered.
 create table public.signals (
   id uuid primary key default gen_random_uuid(),
   symbol text not null,
   timeframe text not null,
+  pattern_timeframe text,
+  confirmation_timeframe text,
+  entry_timeframe text,
+  zone_low numeric not null,
+  zone_high numeric not null,
+  alert_state text not null check (alert_state in ('watch', 'setup', 'confirmed', 'triggered')),
+  current_price numeric,
+  trigger_price numeric not null,
+  invalidation_price numeric not null,
+  target_price numeric not null,
+  distance_to_trigger_percent numeric,
+  daily_open numeric,
+  previous_day_high numeric,
+  previous_day_low numeric,
+  daily_level_confluence jsonb,
   pattern_type text not null check (pattern_type in ('double_top', 'double_bottom')),
   stage text not null check (stage in ('developing', 'candidate', 'confirmed')),
   first_extreme_price numeric not null,
@@ -55,9 +69,9 @@ create table public.signals (
   open_interest_trend jsonb,
   detected_at bigint not null,
   updated_at timestamptz not null default now(),
-  unique (symbol, timeframe, pattern_type, first_extreme_index)
+  unique (symbol, pattern_type)
 );
-create index signals_symbol_timeframe_idx on public.signals (symbol, timeframe);
+create index signals_symbol_idx on public.signals (symbol);
 create index signals_stage_idx on public.signals (stage);
 
 -- Tracks which user has already been notified about which signal at which
@@ -70,8 +84,9 @@ create table public.signal_deliveries (
   signal_id uuid not null references public.signals(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   stage_notified text not null,
+  channel text not null check (channel in ('telegram', 'push')),
   notified_at timestamptz not null default now(),
-  primary key (signal_id, user_id, stage_notified)
+  primary key (signal_id, user_id, stage_notified, channel)
 );
 
 -- Auto-create a matching profiles row the moment someone signs up, so

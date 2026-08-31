@@ -4,6 +4,6 @@
   "description": "Source-agnostic double top / double bottom detection engine",
   "main": "index.js",
   "scripts": {
-    "test": "node test/double-top.test.js && node test/double-bottom.test.js && node test/confluence.test.js && node test/bias-entry.test.js"
+    "test": "node test/double-top.test.js && node test/double-bottom.test.js && node test/confluence.test.js && node test/bias-entry.test.js && node test/price-aware-alerts.test.js"
   }
 }

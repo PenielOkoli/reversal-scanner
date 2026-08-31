@@ -24,9 +24,9 @@
   --color-accent-dim: var(--accent-dim);
   --color-bullish: var(--bullish);
   --color-bearish: var(--bearish);
-  --font-display: var(--font-space-grotesk);
-  --font-sans: var(--font-inter);
-  --font-mono: var(--font-jetbrains-mono);
+  --font-display: ui-rounded, "Trebuchet MS", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
 }
 
 body {

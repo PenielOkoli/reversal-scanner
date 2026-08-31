@@ -25,6 +25,31 @@ Telegram, and VAPID credentials before running the worker. The Bybit client
 needs live network access to api.bybit.com to actually pull candles, so its
 first real test needs to happen outside this scaffold's build environment.
 
+### Database upgrades
+
+For a new project, run `supabase/schema.sql`. For a project created before
+the price-aware alert update, run
+`supabase/migrations/20260831_price_aware_alerts.sql` once in the Supabase
+SQL editor before starting the worker. It consolidates duplicate, derived
+scanner rows and converts watchlists to one row per symbol.
+
+### Alert states
+
+- **Watch** — price is near a valid 4h support/resistance zone; shown in the
+  dashboard only.
+- **Setup** — a direction-aligned 1h reversal pattern has formed at that 4h
+  zone; wait for 15m confirmation.
+- **Confirmed** — a direction-aligned 15m neckline break confirms structure;
+  wait for a 5m execution break.
+- **Triggered** — the direction-aligned 5m neckline is currently broken and
+  price has not moved too far past the trigger; eligible for an alert.
+
+Signals that have moved away from their zone, are too far past a breakout, or
+conflict with an equally mature opposite-direction signal are suppressed. A
+current daily open, previous-day high, or previous-day low must also overlap
+the 4h zone before the scanner surfaces the setup.
+The displayed setup score is a heuristic, not a probability or a guarantee.
+
 ## Status
 
 - [x] Detector engine: built and tested against synthetic double-top and

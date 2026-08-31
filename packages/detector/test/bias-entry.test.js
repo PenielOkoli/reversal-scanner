@@ -1,174 +1,112 @@
 const assert = require("assert");
 const { analyzeSymbol, getZone } = require("../index");
 
-// Default zone: top at [90, 100], bottom at [100, 110]. Override
-// firstExtreme/secondExtreme/neckline directly for zone-specific cases.
 function sig({
   patternType = "double_top",
-  stage,
-  confidence,
+  stage = "candidate",
+  confidence = 70,
   necklineBroken = false,
-  timeframe = "1h",
+  timeframe = "4h",
   firstExtreme = { price: 100 },
   secondExtreme = { price: 99 },
   neckline = 90,
 }) {
-  return { patternType, stage, confidence, necklineBroken, symbol: "BTCUSDT", timeframe, firstExtreme, secondExtreme, neckline };
+  return {
+    symbol: "BTCUSDT",
+    patternType,
+    stage,
+    confidence,
+    necklineBroken,
+    timeframe,
+    firstExtreme,
+    secondExtreme,
+    neckline,
+    distancePercent: 1,
+    barsApart: 10,
+    rsiDivergence: false,
+    volumeTrend: "flat",
+    fundingConfluence: null,
+    openInterestTrend: null,
+    detectedAt: 1,
+  };
 }
 
-// No higher-timeframe reading at all -> nothing gets surfaced, there's no
-// signal without a bias, regardless of what a lower timeframe is doing.
-{
-  const result = analyzeSymbol({
-    "15m": [sig({ stage: "confirmed", confidence: 90, necklineBroken: true, timeframe: "15m" })],
-  });
-  assert.strictEqual(result.length, 0, "an entry-timeframe pattern with no higher-timeframe bias shouldn't surface");
-}
+const dailyLevels = { dailyOpen: 98, previousDayHigh: 100, previousDayLow: 80 };
+const options = { marketLevels: dailyLevels };
 
-// Bias exists, no entry-timeframe reading yet -> developing, confidence is
-// just the bias's own confidence.
+// 4h establishes the major resistance zone. It is dashboard context only
+// until a matching 1h reversal pattern appears inside that zone.
 {
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "candidate", confidence: 55, timeframe: "4h" })],
-  });
+  const result = analyzeSymbol({ "4h": [sig({})] }, 98, options);
   assert.strictEqual(result.length, 1);
-  assert.strictEqual(result[0].stage, "developing");
+  assert.strictEqual(result[0].alertState, "watch");
+  assert.strictEqual(result[0].patternTimeframe, null);
+}
+
+// A matching 1h pattern moves the idea to setup. A 15m pattern alone is
+// deliberately ignored; speed cannot replace the higher-timeframe pattern.
+{
+  const result = analyzeSymbol(
+    {
+      "4h": [sig({})],
+      "1h": [sig({ timeframe: "1h", confidence: 75, firstExtreme: { price: 99 }, secondExtreme: { price: 98 }, neckline: 91 })],
+      "15m": [sig({ timeframe: "15m", stage: "confirmed", necklineBroken: true, firstExtreme: { price: 97 }, secondExtreme: { price: 96 }, neckline: 92 })],
+    },
+    97,
+    options
+  );
+  assert.strictEqual(result[0].alertState, "confirmed");
+  assert.strictEqual(result[0].patternTimeframe, "1h");
+  assert.strictEqual(result[0].confirmationTimeframe, "15m");
   assert.strictEqual(result[0].entryTimeframe, null);
-  assert.strictEqual(result[0].confidence, 55);
-  assert.deepStrictEqual([result[0].zoneLow, result[0].zoneHigh], [90, 100]);
 }
 
-// Bias + a forming (not yet broken) entry AT THE SAME ZONE -> candidate.
+// The 5m break is the final execution condition. It cannot trigger without
+// the already-confirmed 15m layer and the 1h pattern in the 4h zone.
 {
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "candidate", confidence: 60, timeframe: "4h" })],
-    "15m": [
-      sig({
-        stage: "candidate",
-        confidence: 50,
-        necklineBroken: false,
-        timeframe: "15m",
-        firstExtreme: { price: 96 },
-        secondExtreme: { price: 95 },
-        neckline: 92,
-      }),
-    ],
-  });
-  assert.strictEqual(result[0].stage, "candidate");
-  assert.strictEqual(result[0].entryTimeframe, "15m");
-  assert.strictEqual(result[0].confidence, 55, "average of bias(60) and entry(50)");
+  const result = analyzeSymbol(
+    {
+      "4h": [sig({ stage: "confirmed", necklineBroken: true })],
+      "1h": [sig({ timeframe: "1h", stage: "confirmed", necklineBroken: true, confidence: 75, firstExtreme: { price: 99 }, secondExtreme: { price: 98 }, neckline: 91 })],
+      "15m": [sig({ timeframe: "15m", stage: "confirmed", necklineBroken: true, confidence: 80, firstExtreme: { price: 97 }, secondExtreme: { price: 96 }, neckline: 92 })],
+      "5m": [sig({ timeframe: "5m", stage: "confirmed", necklineBroken: true, confidence: 85, firstExtreme: { price: 96 }, secondExtreme: { price: 95 }, neckline: 93 })],
+    },
+    94,
+    options
+  );
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0].alertState, "triggered");
+  assert.strictEqual(result[0].entryTimeframe, "5m");
+  assert.deepStrictEqual(result[0].dailyLevelConfluence.sort(), ["daily_open", "previous_day_high"]);
 }
 
-// Bias + a LIVE, broken entry at the same zone -> confirmed, the
-// actionable case.
+// A zone without daily-open/PDH confluence is suppressed when daily data is
+// available. This makes the scanner more selective than raw M/W matching.
 {
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "confirmed", confidence: 70, timeframe: "4h" })],
-    "15m": [
-      sig({
-        stage: "confirmed",
-        confidence: 80,
-        necklineBroken: true,
-        timeframe: "15m",
-        firstExtreme: { price: 96 },
-        secondExtreme: { price: 95 },
-        neckline: 92,
-      }),
-    ],
+  const result = analyzeSymbol({ "4h": [sig({})] }, 98, {
+    marketLevels: { dailyOpen: 130, previousDayHigh: 130, previousDayLow: 70 },
   });
-  assert.strictEqual(result[0].stage, "confirmed");
-  assert.strictEqual(result[0].entryTimeframe, "15m");
-  // 70*0.4 + 80*0.6 = 76, +10 alignment bonus = 86
-  assert.strictEqual(result[0].confidence, 86);
+  assert.deepStrictEqual(result, []);
 }
 
-// KEY CASE: an entry that faces the same direction but sits at a
-// completely different price level should be ignored, direction alone
-// isn't enough, it has to be reacting to the same zone the bias flagged.
+// Equal-strength bullish and bearish contexts are ambiguity, not two trades.
 {
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "confirmed", confidence: 70, timeframe: "4h", firstExtreme: { price: 100 }, secondExtreme: { price: 99 }, neckline: 90 })],
-    "15m": [
-      sig({
-        stage: "confirmed",
-        confidence: 95,
-        necklineBroken: true,
-        timeframe: "15m",
-        firstExtreme: { price: 50 }, // nowhere near the 4h's [90, 100] zone
-        secondExtreme: { price: 49 },
-        neckline: 45,
-      }),
-    ],
-  });
-  assert.strictEqual(result[0].stage, "developing", "an entry at an unrelated price level shouldn't count");
-  assert.strictEqual(result[0].entryTimeframe, null);
-  assert.strictEqual(result[0].confidence, 70, "should fall back to the bias's own confidence, not the irrelevant entry's");
+  const result = analyzeSymbol(
+    {
+      "4h": [
+        sig({ patternType: "double_top" }),
+        sig({ patternType: "double_bottom", firstExtreme: { price: 90 }, secondExtreme: { price: 91 }, neckline: 100 }),
+      ],
+    },
+    98,
+    { marketLevels: { dailyOpen: 98, previousDayHigh: 100, previousDayLow: 90 } }
+  );
+  assert.deepStrictEqual(result, []);
 }
 
-// An entry just outside the exact zone but within tolerance should still count.
-{
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "confirmed", confidence: 70, timeframe: "4h", firstExtreme: { price: 100 }, secondExtreme: { price: 99 }, neckline: 90 })],
-    "15m": [
-      sig({
-        stage: "confirmed",
-        confidence: 80,
-        necklineBroken: true,
-        timeframe: "15m",
-        firstExtreme: { price: 101.5 }, // just above the zone high of 100, within the 3% tolerance band
-        secondExtreme: { price: 101 },
-        neckline: 100.5,
-      }),
-    ],
-  });
-  assert.strictEqual(result[0].stage, "confirmed", "a slight overshoot within tolerance should still count");
-}
-
-// double_top and double_bottom are independent: a 4h bias for one
-// direction shouldn't manufacture a signal for the opposite direction.
-{
-  const result = analyzeSymbol({
-    "4h": [sig({ patternType: "double_top", stage: "confirmed", confidence: 70, timeframe: "4h" })],
-    "15m": [sig({ patternType: "double_bottom", stage: "confirmed", confidence: 90, necklineBroken: true, timeframe: "15m", firstExtreme: { price: 100 }, secondExtreme: { price: 101 }, neckline: 110 })],
-  });
-  assert.strictEqual(result.length, 1, "only double_top should surface, double_bottom has no 4h/1h bias");
-  assert.strictEqual(result[0].patternType, "double_top");
-  assert.strictEqual(result[0].stage, "developing", "no double_top entry-timeframe reading exists");
-}
-
-// Confidence never exceeds 99 even with a strong bias and strong entry.
-{
-  const result = analyzeSymbol({
-    "4h": [sig({ stage: "confirmed", confidence: 99, timeframe: "4h" })],
-    "15m": [
-      sig({
-        stage: "confirmed",
-        confidence: 99,
-        necklineBroken: true,
-        timeframe: "15m",
-        firstExtreme: { price: 96 },
-        secondExtreme: { price: 95 },
-        neckline: 92,
-      }),
-    ],
-  });
-  assert.strictEqual(result[0].confidence, 99);
-}
-
-// getZone: a top's zone runs from its neckline up to its higher extreme,
-// a bottom's from its lower extreme up to its neckline.
 {
   const top = getZone({ firstExtreme: { price: 100 }, secondExtreme: { price: 98 }, neckline: 90 }, true);
   assert.deepStrictEqual(top, { low: 90, high: 100 });
-
-  const bottom = getZone({ firstExtreme: { price: 50 }, secondExtreme: { price: 52 }, neckline: 60 }, false);
-  assert.deepStrictEqual(bottom, { low: 50, high: 60 });
 }
 
-// Nothing anywhere -> nothing back.
-{
-  const result = analyzeSymbol({});
-  assert.strictEqual(result.length, 0);
-}
-
-console.log("bias/entry analysis tests passed");
+console.log("timeframe pipeline tests passed");

@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "main": "src/index.js",
-  "scripts": { "start": "node src/index.js" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node src/notify/format.test.js"
+  },
   "dependencies": {
     "@reversal-scanner/detector": "*",
     "@reversal-scanner/bybit-client": "*",
